@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
-from wave_function_collapse import FieldState, Graph, Node, NodeID, WaveFunction, WFCAlgorithm
+from centered_wave_function_collapse import FieldState, Graph, Node, NodeID, WaveFunction, WFCAlgorithm
 
 
 # build graph by defining small grid
@@ -83,7 +83,7 @@ class SimpleWaveFunction(WaveFunction[ColorFieldState]):
         
         return probabilities
     
-from wave_functions import FixedNumberWaveFunction
+from centered_wave_functions import FixedNumberWaveFunction
 counts_dict = {ColorFieldState(status=Color.RED): 5, ColorFieldState(status=Color.GREEN): 10, ColorFieldState(status=Color.BLUE): 85}
 fixed_counts_wave = FixedNumberWaveFunction(counts_dict)
 wfa = WFCAlgorithm(graph=graph, wave_functions=[SimpleWaveFunction(),fixed_counts_wave])
