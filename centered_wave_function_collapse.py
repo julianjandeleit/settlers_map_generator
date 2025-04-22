@@ -30,7 +30,6 @@ class WFCAlgorithm(Generic[T]):
     def compute_overlayed_probability(self, node_id: NodeID) -> Dict[T, float]:
         probability_distributions=[wf.get_probability(self.graph, node_id) for wf in self.wave_functions]
         
-        
         prior = probability_distributions[0]
         # Loop through the remaining distributions and chain the updates
         for likelihood in probability_distributions[1:]:
