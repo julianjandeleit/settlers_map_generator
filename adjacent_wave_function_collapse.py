@@ -19,7 +19,8 @@ class WaveFunction(ABC,Generic[T]):
         """nodeID in dict should be neighbor of argument nodeID. Dict should map fieldstate to probability"""
         pb_distributions = self.compute_constrain_adjecency_probability(current_graph, node_id)
         for dr in pb_distributions.values():
-            assert abs(sum(dr.values()) -1.0) < 0.001, "wavefunction needs to return valid probability distribution"
+            s = sum(dr.values())
+            assert abs(s -1.0) < 0.01, f"wavefunction needs to return valid probability distribution: {s}"
 
         return pb_distributions
             
@@ -38,6 +39,7 @@ class GlobalPrior(ABC,Generic[T]):
 
 @dataclass
 class WFCAlgorithm(Generic[T]):
+    """ either wave function or prior needs to be present at least"""
     graph: Graph[T]
     wave_functions: List[WaveFunction[T]]
     global_priors: List[GlobalPrior[T]]
@@ -48,8 +50,6 @@ class WFCAlgorithm(Generic[T]):
     def get_constraints_to_neighbors(self, node_id: NodeID) -> Dict[NodeID, Dict[T, float]]:
 
         neighbor_constraints_by_wf: List[Dict[NodeID, Dict[FieldState, float]]] = [wf.constrain_adjecency_probability(self.graph, node_id) for wf in self.wave_functions]
-        if node_id =="0_4":
-            print("ore constraints", self.graph.nodes["0_4"])
         constraints_by_neighbor = defaultdict(lambda: list())
         for wf in neighbor_constraints_by_wf:
             for nb, pdb in wf.items():
@@ -69,7 +69,7 @@ class WFCAlgorithm(Generic[T]):
     def get_propagated_probabilities(self, node_id: NodeID) -> Dict[T, float]:    
         # constraints of neighbor for current node
         priors = [prior.get_probability(self.graph, node_id) for prior in self.global_priors]
-        nb_constraints = [ self.get_constraints_to_neighbors(neighbor)[node_id]  for neighbor in self.graph.neighbors[node_id] if neighbor is not None]
+        nb_constraints = [ self.get_constraints_to_neighbors(neighbor)[node_id]  for neighbor in self.graph.neighbors[node_id] if neighbor is not None and len(self.wave_functions) > 0]
         # print("\npropagate:")
         # print(len(nb_constraints))
         # print([nb.values() for nb in priors])
@@ -77,13 +77,7 @@ class WFCAlgorithm(Generic[T]):
         superimposed_constraints = superimpose_probabilities(priors+nb_constraints)
         # print(superimposed_constraints.values())
         # print("-")
-        assert sum([v for v in superimposed_constraints.values()]) >= 0.999 and sum([v for v in superimposed_constraints.values()]) <= 1.001, "probabilities need to sum to 1"
-        if node_id =="0_3":
-            print([neighbor for neighbor in self.graph.neighbors[node_id]])
-            print([self.graph.nodes[neighbor].inner if neighbor is not None else None for neighbor in self.graph.neighbors[node_id]])
-            print(self.get_constraints_to_neighbors("0_4")[node_id])
-            #print(nb_constraints)
-            #print(superimposed_constraints.values())
+        assert sum([v for v in superimposed_constraints.values()]) >= 0.99 and sum([v for v in superimposed_constraints.values()]) <= 1.01, f"probabilities need to sum to 1: {superimposed_constraints}"
         return superimposed_constraints
         
     
@@ -93,7 +87,6 @@ class WFCAlgorithm(Generic[T]):
         # divergence = kl_divergence_uniform([p for p in list(probabilities.values()) if p != 0.0])
         # # print(divergence)
         # entropy = 1/float(divergence+0.000001) # eps
-
         probabilities = self.get_propagated_probabilities(node_id=node_id)
         max_p = max(probabilities.values())
         return 1/max_p
@@ -123,18 +116,14 @@ class WFCAlgorithm(Generic[T]):
         undecided_node_ids = [key for key, node in self.graph.nodes.items() if not node.is_collapsed()]
         
         random.shuffle(undecided_node_ids) # TODO use min entropy strategy instead
-        
+      
         while len(undecided_node_ids) > 0:
             undecided_entropies = {nid: self.compute_entropy(nid)  for nid in undecided_node_ids}
 
             min_key = min(undecided_entropies, key=undecided_entropies.get)
-            if min_key == "0_0":
-                print("\nminkey\n")
-            else:
-                print("\nnotheer \n")
+           
             node_id_to_collapse = min_key
             _state, _stats = self.collapse_node(node_id_to_collapse)
-            print("setting", self.graph.nodes[node_id_to_collapse].inner)
             #print(list(_stats["probabilities"].values()), list(undecided_entropies.values()), undecided_entropies[node_id_to_collapse])
             undecided_node_ids.remove(node_id_to_collapse)
             if self._save_hist:

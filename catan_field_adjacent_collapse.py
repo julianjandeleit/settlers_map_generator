@@ -2,7 +2,7 @@
 from copy import deepcopy
 from typing import Dict, Iterable
 from catan_field import CatanFieldState, CatanMap, FieldType, visualize_hex_grid
-from adjacent_wave_function_collapse import WFCAlgorithm, WaveFunction
+from adjacent_wave_function_collapse import GlobalPrior, WFCAlgorithm, WaveFunction
 from centered_pattern_estimator import NeighborhoodProbabilityEstimator
 from stateful_graph import FieldState, Graph, NodeID
 from adjacent_wave_functions import FixedNumberPrior
@@ -33,69 +33,6 @@ def create_random_map():
     visualize_hex_grid(catan_map.convert_hex_grid_to_array())
 
 
-class PunishSmallIslandsWaveFunction(WaveFunction[FieldState]):
-
-    def __init__(self):
-        super().__init__()
-
-    def compute_constrain_adjecency_probability(self, current_graph: Graph[FieldState], node_id: NodeID) -> Dict[NodeID, Dict[FieldState, float]]: 
-        land_size = len(current_graph.get_connected_component(node_id,connecting=[
-            CatanFieldState(status=FieldType.ORE),
-            CatanFieldState(status=FieldType.CLAY),
-            CatanFieldState(status=FieldType.SHEEP),
-            CatanFieldState(status=FieldType.WHEAT),
-            CatanFieldState(status=FieldType.WOOD),
-        ]))
-        
-        possible_states = [
-            CatanFieldState(status=FieldType.ORE),
-            CatanFieldState(status=FieldType.CLAY),
-            CatanFieldState(status=FieldType.SHEEP),
-            CatanFieldState(status=FieldType.WATER),
-            CatanFieldState(status=FieldType.WHEAT),
-            CatanFieldState(status=FieldType.WOOD),
-        ]
-
-        neighbors = current_graph.neighbors[node_id]
-        max_neighbors = 0
-        num_collapsed = 0
-        for neighbor in neighbors:
-            if neighbor is None:
-                continue
-            node = current_graph.nodes[neighbor]
-            max_neighbors += 1
-            if node.is_collapsed():
-                num_collapsed += 1
-        
-        probabilities_by_neighbor = dict()
-        if land_size > 0 and land_size < 4:
-            target_land = 0.95/float(len(possible_states)-1)/float(max_neighbors - num_collapsed)
-            probabilities = {
-                state: (
-                    target_land
-                    if state.status != FieldType.WATER
-                    else (1.0 - target_land* float(len(possible_states)-1)) 
-                )
-                for state in possible_states
-            }
-            for neighbor in neighbors:
-                if neighbor is None:
-                    continue
-                #probabilities_by_neighbor[neighbor] = deepcopy(probabilities)
-                probabilities_by_neighbor[neighbor] = probabilities
-        else:
-            probabilities =  {state: 1.0 / len(possible_states) for state in possible_states}
-            probabilities_by_neighbor = dict()
-            for neighbor in neighbors:
-                if neighbor is None:
-                    continue
-                #probabilities_by_neighbor[neighbor] = deepcopy(probabilities)
-                probabilities_by_neighbor[neighbor] = probabilities
-        
-        # for key, pb in probabilities_by_neighbor.items():
-        #     print(f"smallislandswf: ({key}) {pb.values()}")
-        return probabilities_by_neighbor
-
 class DEBUGWF(WaveFunction[FieldState]):
 
     def __init__(self):
@@ -125,18 +62,197 @@ class DEBUGWF(WaveFunction[FieldState]):
         
         probabilities_by_neighbor = dict()
         node = current_graph.nodes[node_id]
-        print("node: ", node_id, node, node.inner == CatanFieldState(status=FieldType.ORE))
         if node.inner == CatanFieldState(status=FieldType.ORE):
+            target = .95
+            others = (1-target)/(len(possible_states))
             probabilities = {
                     state: (
-                        1.0
+                        target
                         if state.status == FieldType.ORE
-                        else 0.0
+                        else others
                     )
                     for state in possible_states
                 }
         
-            print(probabilities)
+            for neighbor in neighbors:
+                if neighbor is None:
+                    continue
+                probabilities_by_neighbor[neighbor] = probabilities
+        else:
+            probabilities = {state: 1.0 / len(possible_states) for state in possible_states}
+            for neighbor in neighbors:
+                if neighbor is None:
+                    continue
+                probabilities_by_neighbor[neighbor] = probabilities
+        return probabilities_by_neighbor
+    
+
+class AvoidSmallIslandsWF(WaveFunction[FieldState]):
+
+    def __init__(self):
+        super().__init__()
+
+    def compute_constrain_adjecency_probability(self, current_graph: Graph[FieldState], node_id: NodeID) -> Dict[NodeID, Dict[FieldState, float]]: 
+        
+        possible_states = [
+            CatanFieldState(status=FieldType.ORE),
+            CatanFieldState(status=FieldType.CLAY),
+            CatanFieldState(status=FieldType.SHEEP),
+            CatanFieldState(status=FieldType.WATER),
+            CatanFieldState(status=FieldType.WHEAT),
+            CatanFieldState(status=FieldType.WOOD),
+        ]
+
+        neighbors = current_graph.neighbors[node_id]
+        max_neighbors = 0
+        num_collapsed = 0
+        for neighbor in neighbors:
+            if neighbor is None:
+                continue
+            node = current_graph.nodes[neighbor]
+            max_neighbors += 1
+            if node.is_collapsed():
+                num_collapsed += 1
+        
+
+        island_size = current_graph.get_connected_component(node_id, connecting=[s for s in possible_states if s != CatanFieldState(status=FieldType.WATER)])
+        island_size = len(island_size)
+
+        probabilities_by_neighbor = dict()
+        if island_size > 0 and island_size < 3:
+            #target = 1-(1/len(possible_states) + ((0.999-1/len(possible_states))*float(num_collapsed+1 if num_collapsed <= num_collapsed-1 else num_collapsed)/(max_neighbors-1))) #  target p for water
+            target = 1-0.85
+            others = (1-target)/(len(possible_states)-1)
+            probabilities = {
+                    state: (
+                        target
+                        if state.status == FieldType.WATER
+                        else others
+                    )
+                    for state in possible_states
+                }
+        
+            for neighbor in neighbors:
+                if neighbor is None:
+                    continue
+                probabilities_by_neighbor[neighbor] = probabilities
+        else:
+            probabilities = {state: 1.0 / len(possible_states) for state in possible_states}
+            for neighbor in neighbors:
+                if neighbor is None:
+                    continue
+                probabilities_by_neighbor[neighbor] = probabilities
+        return probabilities_by_neighbor
+    
+
+class MinimizeSurfaceEdges(WaveFunction[FieldState]):
+
+    def __init__(self):
+        super().__init__()
+
+    def compute_constrain_adjecency_probability(self, current_graph: Graph[FieldState], node_id: NodeID) -> Dict[NodeID, Dict[FieldState, float]]: 
+        
+        possible_states = [
+            CatanFieldState(status=FieldType.ORE),
+            CatanFieldState(status=FieldType.CLAY),
+            CatanFieldState(status=FieldType.SHEEP),
+            CatanFieldState(status=FieldType.WATER),
+            CatanFieldState(status=FieldType.WHEAT),
+            CatanFieldState(status=FieldType.WOOD),
+        ]
+
+        neighbors = current_graph.neighbors[node_id]
+        max_neighbors = 0
+        num_collapsed = 0
+        for neighbor in neighbors:
+            if neighbor is None:
+                continue
+            node = current_graph.nodes[neighbor]
+            max_neighbors += 1
+            if node.is_collapsed():
+                num_collapsed += 1
+        
+
+        island = current_graph.get_connected_component(node_id, connecting=[s for s in possible_states if s != CatanFieldState(status=FieldType.WATER)])
+
+        probabilities_by_neighbor = dict()
+        if len(island) > 0:        
+            for neighbor in neighbors:
+                if neighbor is None:
+                    continue
+                neighbor_neighbors = current_graph.neighbors[neighbor]
+                overlap = sum([1 for n in neighbor_neighbors if n in island])
+                if overlap == 1:
+                    target_water = 1 - 0.125
+                elif overlap == 2:
+                    target_water = 1 - 0.5
+                elif overlap == 3:
+                    target_water = 1 - 0.75
+                else:
+                    target_water = 1 - 0.85
+                others = (1-target_water)/(len(possible_states)-1)
+                probabilities = {
+                        state: (
+                            target_water
+                            if state.status == FieldType.WATER
+                            else others
+                        )
+                        for state in possible_states
+                    }
+                probabilities_by_neighbor[neighbor] = probabilities
+
+        else:
+            probabilities = {state: 1.0 / len(possible_states) for state in possible_states}
+            for neighbor in neighbors:
+                if neighbor is None:
+                    continue
+                probabilities_by_neighbor[neighbor] = probabilities
+        return probabilities_by_neighbor
+
+class AvoidBigIslandsWF(WaveFunction[FieldState]):
+
+    def __init__(self):
+        super().__init__()
+
+    def compute_constrain_adjecency_probability(self, current_graph: Graph[FieldState], node_id: NodeID) -> Dict[NodeID, Dict[FieldState, float]]: 
+        
+        possible_states = [
+            CatanFieldState(status=FieldType.ORE),
+            CatanFieldState(status=FieldType.CLAY),
+            CatanFieldState(status=FieldType.SHEEP),
+            CatanFieldState(status=FieldType.WATER),
+            CatanFieldState(status=FieldType.WHEAT),
+            CatanFieldState(status=FieldType.WOOD),
+        ]
+
+        neighbors = current_graph.neighbors[node_id]
+        max_neighbors = 0
+        num_collapsed = 0
+        for neighbor in neighbors:
+            if neighbor is None:
+                continue
+            node = current_graph.nodes[neighbor]
+            max_neighbors += 1
+            if node.is_collapsed():
+                num_collapsed += 1
+        
+
+        island_size = current_graph.get_connected_component(node_id, connecting=[s for s in possible_states if s != CatanFieldState(status=FieldType.WATER)])
+        island_size = len(island_size)
+
+        probabilities_by_neighbor = dict()
+        if island_size >= 3:
+            target = 1.0 / len(possible_states) + (1-1.0 / len(possible_states))*0.25 #  target p for water
+            others = (1-target)/(len(possible_states)-1)
+            probabilities = {
+                    state: (
+                        target
+                        if state.status == FieldType.WATER
+                        else others
+                    )
+                    for state in possible_states
+                }
+        
             for neighbor in neighbors:
                 if neighbor is None:
                     continue
@@ -149,20 +265,14 @@ class DEBUGWF(WaveFunction[FieldState]):
                 probabilities_by_neighbor[neighbor] = probabilities
         return probabilities_by_neighbor
 
-class PunishBiglandsWaveFunction(WaveFunction[FieldState]):
 
+class SaveWaterPrior(GlobalPrior[FieldState]):
+    
     def __init__(self):
         super().__init__()
-
-    def compute_constrain_adjecency_probability(self, current_graph: Graph[FieldState], node_id: NodeID) -> Dict[NodeID, Dict[FieldState, float]]: 
-        land_size = len(current_graph.get_connected_component(node_id,connecting=[
-            CatanFieldState(status=FieldType.ORE),
-            CatanFieldState(status=FieldType.CLAY),
-            CatanFieldState(status=FieldType.SHEEP),
-            CatanFieldState(status=FieldType.WHEAT),
-            CatanFieldState(status=FieldType.WOOD),
-        ]))
         
+    
+    def get_probability(self, current_graph: Graph[FieldState], node_id: NodeID) -> Dict[FieldState, float]:
         possible_states = [
             CatanFieldState(status=FieldType.ORE),
             CatanFieldState(status=FieldType.CLAY),
@@ -171,55 +281,29 @@ class PunishBiglandsWaveFunction(WaveFunction[FieldState]):
             CatanFieldState(status=FieldType.WHEAT),
             CatanFieldState(status=FieldType.WOOD),
         ]
-
-        neighbors = current_graph.neighbors[node_id]
-        max_neighbors = len(neighbors)
-        num_collapsed = 0
-        for neighbor in neighbors:
-            if neighbor is None:
-                continue
-            node = current_graph.nodes[neighbor]
-            if node.is_collapsed():
-                num_collapsed += 1
-        
-        
-        if land_size >=3:
-            target_land = 0.25/land_size/float(max_neighbors-num_collapsed)
-            probabilities = {
+        target = 1.0 / len(possible_states) *0.5 #  target p for water
+        others = (1-target)/(len(possible_states)-1)
+        probabilities = {
                 state: (
-                    target_land/(len(possible_states) - 1)
-                    if state.status != FieldType.WATER
-                    else (1.0 - target_land*float(len(possible_states)-1))
+                    target
+                    if state.status == FieldType.WATER
+                    else others
                 )
                 for state in possible_states
             }
-            probabilities_by_neighbor = dict()
-            for neighbor in neighbors:
-                if neighbor is None:
-                    continue
-                #probabilities_by_neighbor[neighbor] = deepcopy(probabilities)
-                probabilities_by_neighbor[neighbor] = probabilities
-            return probabilities_by_neighbor
-        else:
-            probabilities = {state: 1.0 / len(possible_states) for state in possible_states}
-            probabilities_by_neighbor = dict()
-            for neighbor in neighbors:
-                if neighbor is None:
-                    continue
-                #probabilities_by_neighbor[neighbor] = deepcopy(probabilities)
-                probabilities_by_neighbor[neighbor] = probabilities
-            return probabilities_by_neighbor
+        # Example: Let's assume we have a simple logic to determine probabilities
+        #probabilities = {state: count/total_available for state, count in available_counts.items()}
+        return probabilities
 
 # Example usage
 if __name__ == "__main__":
 
     import random
     seed=29012
-    random.seed(seed)
-    np.random.seed(seed)
-
-    punish_biglands_wf = PunishBiglandsWaveFunction()
-    punish_smalllands_wf = PunishSmallIslandsWaveFunction()
+    #seed = None
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
 
     fixed_number_pr = FixedNumberPrior(
         available_state_counts={
@@ -233,11 +317,11 @@ if __name__ == "__main__":
     )
 
     rows, cols = 7, 9  # big -> sum 60=4*9+4*8
-    rows, cols = 5,3 # small
+    #rows, cols = 5,3 # small
     graph, coordsmap = CatanMap.create_hex_grid_graph(rows, cols)
     wfc = WFCAlgorithm(_save_hist=True,
         #graph=graph, wave_functions=[fixed_number_wf,nb_wf,PunishSmallIslandsWaveFunction()],
-        graph=graph, wave_functions=[DEBUGWF()], global_priors=[]
+        graph=graph, wave_functions=[AvoidSmallIslandsWF(), AvoidBigIslandsWF(), MinimizeSurfaceEdges()], global_priors=[]
     )
     generated_graph = wfc.collapse_graph()
     # for nid in graph.nodes.keys():
@@ -252,7 +336,13 @@ if __name__ == "__main__":
     catan_map = CatanMap(generated_graph, rows, cols, coordsmap)
 
     visualize_hex_grid(catan_map.convert_hex_grid_to_array())
+    # print(catan_map.graph.nodes["2_2"])
+    # conn = catan_map.graph.get_connected_component("2_4", [CatanFieldState(status=FieldType.WATER)])
+    # for c in conn:
+    #     catan_map.graph.nodes[c].inner = None
     
+    # visualize_hex_grid(catan_map.convert_hex_grid_to_array())
+
     if wfc._save_hist:
         print("writing history to `_hist`")
         for i, _graph in enumerate(wfc._history):

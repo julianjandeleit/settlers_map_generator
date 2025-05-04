@@ -19,6 +19,7 @@ class FixedNumberPrior(GlobalPrior[FieldState]):
         for node in current_graph.nodes.values():
             if not node.is_collapsed(): continue
             current_counts[node.inner] += 1
+        
         available_counts = dict()
         for state, count in self.total_counts.items():
             available_counts[state] = self.total_counts[state] - current_counts[state]
