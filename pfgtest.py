@@ -35,3 +35,17 @@ print(corr_values)
 corr_factor = Factor(corr_values, name='Correlation')
 
 fg.add_factor([var_a, var_b, var_c], corr_factor)
+
+# %%
+fg.belief_propagation_tree()
+
+print('All Posteriors:')
+pprint.pprint(fg.posterior_for_all_variables())
+
+print()
+print('Posterior for Alice:')
+print(fg.posterior_for_variable(var_a))
+
+#%%
+
+pprint.pprint(fg.posterior_for_all_variables())fg.belief_propagation_iteration()

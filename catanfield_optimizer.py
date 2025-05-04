@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass, field
+import io
 import random
 from typing import Dict, Generic, List, Optional
 import numpy as np
@@ -10,6 +11,9 @@ from catan_field import CatanFieldState, CatanMap, FieldType, visualize_hex_grid
 from stateful_graph import T, FieldState, Graph, Node, NodeID
 from utils import bayesian_update, kl_divergence_uniform
 from scipy.optimize import differential_evolution
+from leap_ec.simple import ea_solve
+import pygad
+
 
 # Define an abstract class
 class FitnessFunction(ABC,Generic[T]):
@@ -44,7 +48,6 @@ class GlobalOptimizer(Generic[T]):
             return [valid_states[int(round(num))] for num in x]
         
         nodes = list(self.graph.nodes.keys())
-        bounds = [(0, len(valid_states)-1) for _n in nodes]
         def apply_encoded_graph(c_graph,x) -> Graph:
             states = nums_to_states([v for v in x])
             new_nodes = {n: Node(inner=s) for n, s in zip(nodes, states)}
@@ -52,20 +55,47 @@ class GlobalOptimizer(Generic[T]):
             return c_graph
         
         def optim_fun(x) -> float:
-            c_graph = deepcopy(self.graph)
-            c_graph = apply_encoded_graph(c_graph, x)
-            
-            fitness = self.compute_graph_fitness(c_graph)
-            fitness = 1.0/float(1.0+fitness) # differential_evolution actually minimizes
-            return fitness
+            try:
+                #c_graph = deepcopy(self.graph)
+                c_graph = copy(self.graph)
+                c_graph = apply_encoded_graph(c_graph, x)
+                
+                fitness = self.compute_graph_fitness(c_graph)
+                #fitness = 1.0/float(1.0+fitness) # differential_evolution actually minimizes
+                return fitness
+            except:
+                return 0.0
         
+        bounds = [(0, len(valid_states)-1) for _n in nodes]
         init_nodes = states_to_num([n.inner for n in self.graph.nodes.values()])
         init_nodes = np.array([init_nodes for _ in range(5)])
-        result = differential_evolution(optim_fun, bounds=bounds, mutation=1.0, init="sobol", atol=0.5, tol=0.0) # atol: fitness is 0.5 when actual fitnesses are 0 because of division by 0 +1
-        encoding = result.x
-        optim_fitness = result.fun
-        print(result)
-        print(f"{optim_fitness}")
+        ga_instance = pygad.GA(num_generations=250,
+                       num_parents_mating=10,
+                       fitness_func=lambda _ga_instance, current_solution, _solution_idx: optim_fun(current_solution),
+                       sol_per_pop=100,
+                       num_genes=len(nodes),
+                       init_range_low=0,
+                       init_range_high=len(valid_states)-1,
+                       parent_selection_type="sss",
+                       keep_parents=10,
+                       keep_elitism=5,
+                       crossover_type="scattered",
+                       crossover_probability=0.1,
+                       mutation_probability=0.1,
+                       mutation_type="random",
+                       mutation_percent_genes=1)
+        ga_instance.run()
+        solution, solution_fitness, _solution_idx = ga_instance.best_solution()
+        print("Parameters of the best solution : {solution}".format(solution=solution))
+        print("Fitness value of the best solution = {solution_fitness}".format(solution_fitness=solution_fitness))
+
+        encoding = solution
+       # encoding=ea_solve(optim_fun, bounds=bounds, stream=stream, hard_bounds=True, mutation_std=1.0, generations=10000, maximize=True, pop_size=8)
+        #result = differential_evolution(optim_fun, bounds=bounds, mutation=1.0, init="sobol", atol=-1) # atol: fitness is 0.5 when actual fitnesses are 0 because of division by 0 +1
+        #encoding = result.x
+        #optim_fitness = result.fun
+        #print(result)
+        #print(f"{optim_fitness}")
 
         optim_graph = deepcopy(self.graph)
         optim_graph = apply_encoded_graph(optim_graph, encoding)
@@ -91,17 +121,18 @@ class FixedNumberFitness(FitnessFunction[FieldState]):
         for state, count in self.total_counts.items():
             available_counts[state] = self.total_counts[state] - current_counts[state]
             
-        total_satisfaction = bool(np.all([v == 0 for v in available_counts.values()]))
+        #total_satisfaction = bool(np.all([v == 0 for v in available_counts.values()]))
         # print(available_counts)
         # print("div", total_satisfaction)
-        if total_satisfaction == True:
-            fitness = 1.0
-        else:
-            fitness = 0.0
-        #fitness = 1/float(1+total_divergence)
+        #if total_satisfaction == True:
+        #    fitness = 1.0
+        #else:
+        #    fitness = 0.0
+        total_divergence = sum([abs(c) for c in available_counts.values()])
+        fitness = 1/float(1+total_divergence)
         #print(total_divergence)
-        fitness = current_counts[CatanFieldState(status=FieldType.WATER)] / float(len(current_graph.nodes))
-        print("fixednum fitness",fitness)
+        #fitness = current_counts[CatanFieldState(status=FieldType.WATER)] #/ float(len(current_graph.nodes))
+        #print("fixednum fitness",fitness)
         return fitness
 
 if __name__ == "__main__":
@@ -138,8 +169,8 @@ if __name__ == "__main__":
     print("ff",fixed_number_f.get_fitness(generated_graph))
     visualize_hex_grid(catan_map.convert_hex_grid_to_array())
     
-    if optimizer._save_hist:
-        print("writing history to `_hist`")
-        for i, _graph in enumerate(optimizer._history):
-            catan_map = CatanMap(_graph, rows, cols, coordsmap)
-            visualize_hex_grid(catan_map.convert_hex_grid_to_array(),show=False, write_png=f"_hist/_hist_{i:02}", stats={k:v for k, v in wfc._history_stats[i].items() if k == "entropy"})
+    # if optimizer._save_hist:
+    #     print("writing history to `_hist`")
+    #     for i, _graph in enumerate(optimizer._history):
+    #         catan_map = CatanMap(_graph, rows, cols, coordsmap)
+    #         visualize_hex_grid(catan_map.convert_hex_grid_to_array(),show=False, write_png=f"_hist/_hist_{i:02}", stats={k:v for k, v in wfc._history_stats[i].items() if k == "entropy"})

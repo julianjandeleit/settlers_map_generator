@@ -214,9 +214,9 @@ if __name__ == "__main__":
     rows, cols = 7, 9  # big -> sum 60=4*9+4*8
     # rows, cols = 7,5 # small
     graph, coordsmap = CatanMap.create_hex_grid_graph(rows, cols)
-    wfc = WFCAlgorithm(_save_hist=True,
+    wfc = WFCAlgorithm(_save_hist=False,
         #graph=graph, wave_functions=[fixed_number_wf,nb_wf,PunishSmallIslandsWaveFunction()],
-        graph=graph, wave_functions=[PunishBiglandsWaveFunction(),PunishSmallIslandsWaveFunction()],
+        graph=graph, wave_functions=[PunishBiglandsWaveFunction(),PunishSmallIslandsWaveFunction(), fixed_number_wf],
     )
     generated_graph = wfc.collapse_graph()
     num_isolated_nodes = count_isolated_nodes(generated_graph, connecting=[CatanFieldState(status=FieldType.ORE),
