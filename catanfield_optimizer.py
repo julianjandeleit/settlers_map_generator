@@ -3,8 +3,10 @@ from collections import defaultdict
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
 import io
+from itertools import combinations
 import random
 from typing import Dict, Generic, List, Optional
+from matplotlib import pyplot as plt
 import numpy as np
 
 from catan_field import CatanFieldState, CatanMap, FieldType, visualize_hex_grid
@@ -13,14 +15,64 @@ from utils import bayesian_update, kl_divergence_uniform
 from scipy.optimize import differential_evolution
 from leap_ec.simple import ea_solve
 import pygad
+import networkx as nx
 
+
+def to_networkx(g: Graph[T]) -> nx.Graph:
+        G = nx.Graph()
+        # 1) add all nodes
+        for nid in g.nodes:
+            G.add_node(nid)
+        # 2) build edges by walking each neighbor‐tuple
+        node_ids = list(g.nodes.keys())
+        for src, nbr_tuple in g.neighbors.items():
+            for _idx, nbr in enumerate(nbr_tuple):
+                if nbr is None:
+                    continue
+                G.add_edge(src, nbr)
+                # else:
+                #     print(f"not and edge: {src} {nbr} {g.nodes[src] if src is not None else None} {g.nodes[nbr] if nbr is not None else None}")
+        return G
+
+def nx_isolate_islands(nxGraph, graph):
+    land_types=[CatanFieldState(status=FieldType.CLAY),CatanFieldState(status=FieldType.ORE),CatanFieldState(status=FieldType.SHEEP),CatanFieldState(status=FieldType.WHEAT),CatanFieldState(status=FieldType.WOOD),]
+    nxnodes = [n for n in nxGraph.nodes()]
+    for node in nxnodes:
+        if graph.nodes[node].inner is None or not graph.nodes[node].inner in land_types:
+            nxGraph.remove_node(node)
+    return nxGraph
+
+def get_num_islands(graph: Graph[T]) -> int:
+    nxGraph = to_networkx(graph)
+    nxGraph = nx_isolate_islands(nxGraph, graph)
+    num_components = nx.number_connected_components(nxGraph)
+    return num_components, nxGraph
+
+def count_unique_triangles(G):
+    unique_triangles = set()
+    
+    # Iterate through each node in the graph
+    for node in G.nodes():
+        # Get the neighbors of the current node
+        neighbors = list(G.neighbors(node))
+        
+        # Check all combinations of neighbors taken 2 at a time
+        for neighbor1, neighbor2 in combinations(neighbors, 2):
+            # Check if there is an edge between the two neighbors
+            if G.has_edge(neighbor1, neighbor2):
+                # Add the triangle as a sorted tuple to ensure uniqueness
+                triangle = tuple(sorted((node, neighbor1, neighbor2)))
+                unique_triangles.add(triangle)
+    
+    # Return the number of unique triangles
+    return len(unique_triangles)
 
 # Define an abstract class
 class FitnessFunction(ABC,Generic[T]):
     
     @abstractmethod
     def get_fitness(self, current_graph: Graph[T]) -> float: # Graph T is current state of graph
-        """this method should return a number that indicates its fitness. It will be multiplicatively combined with other fintess functions. Higher is better."""
+        """this method should return a number that indicates its fitness. It will be multiplicatively combined with other fintess functions. Higher is better. Ideally but not necessary within [0,1] (for readability and balance)"""
         pass  # This is an abstract method, no implementation here.
     
     
@@ -34,7 +86,9 @@ class GlobalOptimizer(Generic[T]):
     
     def compute_graph_fitness(self, graph_candidate: Graph[T]) -> float:
         """returns fitness of specific graph instance"""
-        fitness = np.prod([1.0]+[ff.get_fitness(graph_candidate) for ff in self.fitness_functions])
+        fitness =  1.0 
+        for ff in self.fitness_functions:
+            fitness *= ff.get_fitness(graph_candidate)
         return fitness  
         
     def optimize_graph(self, possible_states: List[T]) -> Graph[T]:
@@ -66,7 +120,7 @@ class GlobalOptimizer(Generic[T]):
             except:
                 return 0.0
         
-        bounds = [(0, len(valid_states)-1) for _n in nodes]
+        #bounds = [(0, len(valid_states)-1) for _n in nodes]
         init_nodes = states_to_num([n.inner for n in self.graph.nodes.values()])
         init_nodes = np.array([init_nodes for _ in range(5)])
         ga_instance = pygad.GA(num_generations=250,
@@ -79,10 +133,11 @@ class GlobalOptimizer(Generic[T]):
                        parent_selection_type="sss",
                        keep_parents=10,
                        keep_elitism=5,
-                       crossover_type="scattered",
+                       crossover_type="uniform",
                        crossover_probability=0.1,
                        mutation_probability=0.1,
                        mutation_type="random",
+                       #random_seed=42,
                        mutation_percent_genes=1)
         ga_instance.run()
         solution, solution_fitness, _solution_idx = ga_instance.best_solution()
@@ -134,6 +189,60 @@ class FixedNumberFitness(FitnessFunction[FieldState]):
         #fitness = current_counts[CatanFieldState(status=FieldType.WATER)] #/ float(len(current_graph.nodes))
         #print("fixednum fitness",fitness)
         return fitness
+    
+class NumberIslandsFitness(FitnessFunction[FieldState]):
+    
+    def __init__(self, target_number=3):
+        super().__init__()
+        self.target_number = target_number
+        
+    
+    def get_fitness(self, current_graph: Graph[FieldState]) -> float:
+        num_islands, _nxgraph = get_num_islands(current_graph)
+        
+        total_divergence = abs(num_islands - self.target_number)
+        #fitness = 1/float(1+total_divergence)
+        if total_divergence == 0.0:
+            return 1.0
+        else:
+            return 0.0
+        #return fitness
+    
+class EvenIslandsFitness(FitnessFunction[FieldState]):
+    
+    def __init__(self):
+        super().__init__()
+        
+    
+    def get_fitness(self, current_graph: Graph[FieldState]) -> float:
+        nxGraph = to_networkx(current_graph)
+        nxGraph = nx_isolate_islands(nxGraph, current_graph)
+        components = list(nx.connected_components(nxGraph))
+        island_sizes = [len(c) for c in components]
+        mean_size = np.mean(island_sizes).item()
+        total_divergence = sum([abs(len(c) - mean_size) for c in components])
+        weighted_divergence = total_divergence / len(island_sizes) 
+        fitness = 1/float(1+weighted_divergence)
+
+        return fitness
+
+
+class TriangleJunctionsFitness(FitnessFunction[FieldState]):
+    
+    def __init__(self):
+        super().__init__()
+        
+    
+    def get_fitness(self, current_graph: Graph[FieldState]) -> float:
+        nxGraph = to_networkx(current_graph)
+        nxGraph = nx_isolate_islands(nxGraph, current_graph)
+        num_triangles = count_unique_triangles(nxGraph)
+        
+        #print(num_triangles)
+        weighted_triangles = 0.25*0.03* num_triangles
+        fitness = 1/float(1-weighted_triangles)
+
+        return fitness
 
 if __name__ == "__main__":
     # create_random_map()
@@ -158,16 +267,34 @@ if __name__ == "__main__":
             CatanFieldState(status=FieldType.WOOD): 7,
         })
     
+    num_islands_f = NumberIslandsFitness(target_number=3)
+    
+    even_islands_f = EvenIslandsFitness()
+    
+    triangle_fitness_f = TriangleJunctionsFitness()
+    
     rows, cols = 7, 9  # big -> sum 60=4*9+4*8
     # rows, cols = 7,5 # small
     graph, coordsmap = CatanMap.create_hex_grid_graph(rows, cols)
     optimizer = GlobalOptimizer(_save_hist=True,
-        graph=graph, fitness_functions=[fixed_number_f],
+        graph=graph, fitness_functions=[fixed_number_f, num_islands_f, even_islands_f, triangle_fitness_f],
     )
     generated_graph = optimizer.optimize_graph(possible_states=land_states+[CatanFieldState(status=FieldType.WATER)])
+    
+    num_islands, _nxgraph = get_num_islands(generated_graph)
+    # print(f"{num_islands=}")
+    # nx.draw_spring(_nxgraph)
+    # plt.show()
+    
     catan_map = CatanMap(generated_graph, rows, cols, coordsmap)
-    print("ff",fixed_number_f.get_fitness(generated_graph))
+    print("ff",optimizer.compute_graph_fitness(generated_graph))
+    print("nf", fixed_number_f.get_fitness(generated_graph))
+    print("ni", num_islands_f.get_fitness(generated_graph))
+    print("ef", even_islands_f.get_fitness(generated_graph))
+    print("jf", triangle_fitness_f.get_fitness(generated_graph))
     visualize_hex_grid(catan_map.convert_hex_grid_to_array())
+    
+    
     
     # if optimizer._save_hist:
     #     print("writing history to `_hist`")
