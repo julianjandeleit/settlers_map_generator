@@ -99,7 +99,15 @@ class GlobalOptimizer(Generic[T]):
             return [float(valid_states.index(s)) for s in states]
         
         def nums_to_states(x: List[float]) -> List[Optional[T]]:
-            return [valid_states[int(round(num))] for num in x]
+            state_list = []
+            #print("")
+            for num in x:
+                int_num = int(round(num))
+                #print(int_num, valid_states)
+                state = valid_states[int_num]
+                state_list.append(state)
+                
+            return state_list
         
         nodes = list(self.graph.nodes.keys())
         def apply_encoded_graph(c_graph,x) -> Graph:
@@ -110,6 +118,7 @@ class GlobalOptimizer(Generic[T]):
         
         def optim_fun(x) -> float:
             try:
+                #c_graph = self.graph
                 #c_graph = deepcopy(self.graph)
                 c_graph = copy(self.graph)
                 c_graph = apply_encoded_graph(c_graph, x)
@@ -118,12 +127,12 @@ class GlobalOptimizer(Generic[T]):
                 #fitness = 1.0/float(1.0+fitness) # differential_evolution actually minimizes
                 return fitness
             except:
-                return 0.0
+                return -np.inf
         
         #bounds = [(0, len(valid_states)-1) for _n in nodes]
         init_nodes = states_to_num([n.inner for n in self.graph.nodes.values()])
         init_nodes = np.array([init_nodes for _ in range(5)])
-        ga_instance = pygad.GA(num_generations=250,
+        ga_instance = pygad.GA(num_generations=750,#500
                        num_parents_mating=10,
                        fitness_func=lambda _ga_instance, current_solution, _solution_idx: optim_fun(current_solution),
                        sol_per_pop=100,
@@ -245,6 +254,12 @@ class TriangleJunctionsFitness(FitnessFunction[FieldState]):
         return fitness
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description='Number of islands to generate')
+    parser.add_argument('--number', type=int, choices=range(1, 10), required=True,
+                    help='An integer in the range 1 to 5.')
+
+    args = parser.parse_args()
     # create_random_map()
 
     array = np.load("grid_states/catan_grid_state_25_04_20.npy")
@@ -267,7 +282,7 @@ if __name__ == "__main__":
             CatanFieldState(status=FieldType.WOOD): 7,
         })
     
-    num_islands_f = NumberIslandsFitness(target_number=3)
+    num_islands_f = NumberIslandsFitness(target_number=args.number)
     
     even_islands_f = EvenIslandsFitness()
     
@@ -277,7 +292,8 @@ if __name__ == "__main__":
     # rows, cols = 7,5 # small
     graph, coordsmap = CatanMap.create_hex_grid_graph(rows, cols)
     optimizer = GlobalOptimizer(_save_hist=True,
-        graph=graph, fitness_functions=[fixed_number_f, num_islands_f, even_islands_f, triangle_fitness_f],
+        graph=graph, fitness_functions=[fixed_number_f, num_islands_f, even_islands_f,triangle_fitness_f],
+#        graph=graph, fitness_functions=[fixed_number_f],
     )
     generated_graph = optimizer.optimize_graph(possible_states=land_states+[CatanFieldState(status=FieldType.WATER)])
     
